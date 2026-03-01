@@ -6,7 +6,11 @@
 import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 
-const staticFiles = ['popup.html', 'popup.css', 'popup.js', 'manifest.json'];
+const staticFiles = [
+  'popup.html', 'popup.css', 'popup.js',
+  'sidepanel.html', 'sidepanel.css', 'sidepanel.js',
+  'manifest.json',
+];
 const staticDirs = ['icons'];
 
 function copyFile(src, dest) {

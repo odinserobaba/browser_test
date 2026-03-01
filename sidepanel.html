@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Playwright Recorder</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <span class="logo">🎭</span>
+        <span class="title">AI Playwright Recorder</span>
+      </div>
+      <div id="statusDot" class="status-dot status-idle" title="Idle"></div>
+    </header>
+
+    <!-- Controls: row 1 — recording -->
+    <div class="controls">
+      <button id="btnRecord" class="btn btn-record">
+        <span class="btn-icon">⏺</span> Record
+      </button>
+      <button id="btnStop" class="btn btn-stop" disabled>
+        <span class="btn-icon">⏹</span> Stop
+      </button>
+      <button id="btnSaveSession" class="btn btn-save-session" disabled title="Save recorded actions to JSON (no LLM)">
+        <span class="btn-icon">💾</span> Save
+      </button>
+    </div>
+
+    <!-- Controls: row 2 — generation -->
+    <div class="controls controls-gen">
+      <button id="btnGenerate" class="btn btn-generate" disabled>
+        <span class="btn-icon">✨</span> Generate Test (LLM)
+      </button>
+      <button id="btnLoadGenerate" class="btn btn-load-gen" title="Load a saved session JSON and generate test">
+        <span class="btn-icon">📂</span> Load &amp; Generate
+      </button>
+    </div>
+    <!-- Hidden file input for loading session JSON -->
+    <input type="file" id="sessionFileInput" accept=".json" style="display:none">
+
+    <!-- Folder Section -->
+    <div class="folder-bar">
+      <span class="folder-icon">📁</span>
+      <span id="folderLabel" class="folder-label">Select project folder to save tests</span>
+      <button id="btnFolder" class="btn-small">Browse</button>
+    </div>
+
+    <!-- Pages captured indicator -->
+    <div class="pages-bar" id="pagesBar" style="display:none">
+      <span class="pages-icon">🌐</span>
+      <span id="pagesLabel" class="pages-label">0 pages captured</span>
+      <span id="pagesList" class="pages-list"></span>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="actions">
+        Actions <span id="actionBadge" class="badge">0</span>
+      </button>
+      <button class="tab" data-tab="console">
+        Console <span id="consoleBadge" class="badge badge-warn" style="display:none">!</span>
+      </button>
+    </div>
+
+    <!-- Tab: Actions -->
+    <div id="tabActions" class="tab-content active">
+      <div class="tab-toolbar">
+        <span class="toolbar-hint" id="actionsHint">No actions yet</span>
+        <button id="btnClearActions" class="btn-tiny">Clear</button>
+      </div>
+      <div id="actionList" class="action-list">
+        <div class="empty-state">
+          <div class="empty-icon">🎬</div>
+          <div>Press <strong>Record</strong> to start capturing browser actions</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Console -->
+    <div id="tabConsole" class="tab-content">
+      <div class="tab-toolbar">
+        <span class="toolbar-hint">Recording log</span>
+        <button id="btnClearLog" class="btn-tiny">Clear</button>
+      </div>
+      <div id="consoleLog" class="console-log">
+        <div class="empty-state">
+          <div class="empty-icon">📋</div>
+          <div>Log output will appear here</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Panel (always at bottom) -->
+    <div class="settings-panel">
+      <div class="settings-header" id="settingsToggle">
+        <span>⚙ LLM Settings</span>
+        <span class="chevron" id="settingsChevron">▶</span>
+      </div>
+      <div class="settings-body" id="settingsBody" style="display:none">
+        <div class="form-row">
+          <label>Provider</label>
+          <select id="llmProvider">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="local">Local (Ollama)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>API Key</label>
+          <input type="password" id="apiKey" placeholder="sk-...">
+        </div>
+        <div class="form-row">
+          <label>Model</label>
+          <input type="text" id="llmModel" placeholder="gpt-4o">
+        </div>
+        <div class="form-row">
+          <label>Base URL <small>(optional)</small></label>
+          <input type="text" id="baseUrl" placeholder="https://api.openai.com/v1">
+        </div>
+        <button id="btnSaveConfig" class="btn btn-save">Save Settings</button>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div id="statusBar" class="status-bar" style="display:none"></div>
+
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

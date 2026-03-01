@@ -11,9 +11,9 @@ console.log('Checking project structure...\n');
 const requiredFiles = [
   'dist/background/index.js',
   'dist/content/index.js',
-  'dist/popup.html',
-  'dist/popup.css',
-  'dist/popup.js',
+  'dist/sidepanel.html',
+  'dist/sidepanel.css',
+  'dist/sidepanel.js',
   'dist/manifest.json',
 ];
 
@@ -77,12 +77,12 @@ try {
       });
     }
 
-    if (manifest.action?.default_popup) {
-      const popupPath = manifest.action.default_popup;
-      if (existsSync(join('dist', popupPath))) {
-        console.log(`  OK  Popup: ${popupPath}`);
+    if (manifest.side_panel?.default_path) {
+      const spPath = manifest.side_panel.default_path;
+      if (existsSync(join('dist', spPath))) {
+        console.log(`  OK  Side panel: ${spPath}`);
       } else {
-        console.log(`  MISSING  Popup: ${popupPath}`);
+        console.log(`  MISSING  Side panel: ${spPath}`);
         hasErrors = true;
       }
     }

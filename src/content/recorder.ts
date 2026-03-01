@@ -1,151 +1,258 @@
 /**
- * Recorder module - сбор данных элементов и запись действий
+ * Recorder — collects rich element context for reliable Playwright locator generation.
+ *
+ * Key improvements over the basic version:
+ *  - domSnapshot   = outerHTML of ancestor 3-4 levels up (with siblings),
+ *                    target element marked with data-playwright-target="1"
+ *  - pageContext    = outerHTML of nearest semantic landmark (form/section/main…)
+ *  - ElementSignature captures aria-label, associated <label>, all data-* attrs,
+ *    a short CSS path, and normalised text
  */
 
 import { ElementSignature, RecordedAction } from './types';
 import { isHighlightElement } from './highlighter';
 
-/**
- * Собирает сигнатуру элемента для последующей генерации локатора
- */
-export function collectElementSignature(element: HTMLElement): ElementSignature {
-  const signature: ElementSignature = {
-    tagName: element.tagName.toLowerCase(),
+// ── Element Signature ────────────────────────────────────────────
+
+/** Semantic / landmark tags that provide meaningful page context */
+const LANDMARK_TAGS = new Set([
+  'form', 'main', 'section', 'article',
+  'nav', 'header', 'footer', 'aside', 'dialog',
+]);
+
+/** Tags we walk up to when looking for an interactive element */
+const INTERACTIVE_TAGS = new Set([
+  'button', 'a', 'input', 'select', 'textarea', 'label',
+]);
+
+export function collectElementSignature(el: HTMLElement): ElementSignature {
+  const sig: ElementSignature = {
+    tag:     el.tagName.toLowerCase(),
+    tagName: el.tagName.toLowerCase(), // backward compat
   };
 
-  // ID (если не динамический)
-  if (element.id && !isDynamicId(element.id)) {
-    signature.id = element.id;
+  // ID (skip dynamic ones)
+  if (el.id && !isDynamicId(el.id)) sig.id = el.id;
+
+  // CSS class list (skip too-generic classes)
+  if (el.className && typeof el.className === 'string') {
+    const classes = el.className.split(/\s+/).filter(c => c.length > 0 && c.length < 40);
+    if (classes.length) sig.classes = classes;
   }
 
-  // Classes
-  if (element.className && typeof element.className === 'string') {
-    signature.classes = element.className.split(/\s+/).filter(c => c.length > 0);
-  }
+  // Visible text (trim whitespace, cap length)
+  const rawText = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+  if (rawText && rawText.length < 120) sig.text = rawText;
 
-  // Text content
-  const text = element.innerText?.trim() || element.textContent?.trim();
-  if (text && text.length < 100) {
-    signature.text = text;
-  }
+  // data-testid (highest priority!)
+  const testId = el.getAttribute('data-testid') || el.getAttribute('data-test-id');
+  if (testId) sig.testId = testId;
 
-  // Form attributes
-  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
-    signature.name = element.name || undefined;
-    signature.placeholder = element.placeholder || undefined;
-    signature.type = element.type || undefined;
-    signature.value = element.value || undefined;
-    if (element instanceof HTMLInputElement) {
-      signature.checked = element.checked;
+  // All other data-* attributes
+  const dataAttrs: Record<string, string> = {};
+  for (const attr of Array.from(el.attributes)) {
+    if (attr.name.startsWith('data-') && attr.name !== 'data-testid' && attr.name !== 'data-test-id') {
+      dataAttrs[attr.name] = attr.value;
+    }
+  }
+  if (Object.keys(dataAttrs).length) sig.dataAttributes = dataAttrs;
+
+  // ARIA
+  const ariaLabel = el.getAttribute('aria-label');
+  if (ariaLabel) sig.ariaLabel = ariaLabel;
+
+  const ariaLabelledby = el.getAttribute('aria-labelledby');
+  if (ariaLabelledby) {
+    // Resolve the referenced element's text
+    const refEl = document.getElementById(ariaLabelledby);
+    if (refEl) {
+      sig.ariaLabelledby = (refEl.innerText || refEl.textContent || '').trim().slice(0, 80);
     }
   }
 
-  if (element instanceof HTMLSelectElement) {
-    signature.name = element.name || undefined;
-    signature.selected = element.selectedIndex >= 0;
+  const role = el.getAttribute('role');
+  if (role) sig.role = role;
+
+  const title = el.getAttribute('title');
+  if (title) sig.title = title;
+
+  // Associated <label> text (for inputs)
+  if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+    const associatedLabel = findAssociatedLabel(el);
+    if (associatedLabel) sig.label = associatedLabel;
+
+    sig.name        = el.name        || undefined;
+    sig.placeholder = (el as HTMLInputElement).placeholder || undefined;
+    sig.type        = (el as HTMLInputElement).type        || undefined;
   }
 
-  if (element instanceof HTMLAnchorElement) {
-    signature.href = element.href || undefined;
-  }
+  if (el instanceof HTMLInputElement)  sig.checked  = el.checked;
+  if (el instanceof HTMLSelectElement) sig.selected = el.selectedIndex >= 0;
+  if (el instanceof HTMLAnchorElement) sig.href = el.href || undefined;
 
-  // ARIA attributes
-  signature.role = element.getAttribute('role') || undefined;
+  // Short CSS path (element → up to 3 stable ancestors)
+  sig.cssPath = buildCssPath(el, 3);
 
-  // Test ID (приоритет!)
-  signature.testId = element.getAttribute('data-testid') || undefined;
-
-  return signature;
+  return sig;
 }
 
-/**
- * Проверяет, является ли ID динамическим (содержит случайные символы)
- */
+/** Return the text of a <label> associated with a form element */
+function findAssociatedLabel(el: HTMLElement): string | undefined {
+  // By id attribute
+  if (el.id) {
+    const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+    if (label) return (label.innerText || label.textContent || '').trim().slice(0, 80);
+  }
+  // Closest wrapping <label>
+  const parent = el.closest('label');
+  if (parent) {
+    const clone = parent.cloneNode(true) as HTMLElement;
+    // Remove the input from the clone so we get only the label text
+    clone.querySelectorAll('input, select, textarea').forEach(n => n.remove());
+    return (clone.innerText || clone.textContent || '').trim().slice(0, 80);
+  }
+  return undefined;
+}
+
+/** Build a short, readable CSS selector path from el upward (max `depth` steps) */
+function buildCssPath(el: HTMLElement, depth: number): string {
+  const parts: string[] = [];
+  let current: HTMLElement | null = el;
+
+  for (let i = 0; i < depth && current && current !== document.body; i++) {
+    parts.unshift(describeSingleElement(current));
+    current = current.parentElement;
+  }
+
+  return parts.join(' > ');
+}
+
+function describeSingleElement(el: HTMLElement): string {
+  let desc = el.tagName.toLowerCase();
+  if (el.id && !isDynamicId(el.id)) desc += `#${el.id}`;
+  else {
+    const testId = el.getAttribute('data-testid');
+    if (testId) desc += `[data-testid="${testId}"]`;
+    else if (el.className && typeof el.className === 'string') {
+      const first = el.className.split(/\s+/)[0];
+      if (first && first.length < 30) desc += `.${first}`;
+    }
+  }
+  return desc;
+}
+
 function isDynamicId(id: string): boolean {
-  // Простая эвристика: если ID содержит длинные числа или UUID-подобные строки
-  return /^\d{6,}$/.test(id) || /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
+  return /^\d{5,}$/.test(id) ||
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id) ||
+    /^[a-z0-9]{20,}$/i.test(id);
 }
 
-/**
- * Получает HTML сниппет вокруг элемента (3 уровня вложенности)
- */
-export function getDomSnapshot(element: HTMLElement, depth: number = 3): string {
-  let current: HTMLElement | null = element;
-  let html = '';
+// ── DOM Snapshots ────────────────────────────────────────────────
 
-  // Поднимаемся вверх по DOM дереву
-  for (let i = 0; i < depth && current; i++) {
-    if (current.parentElement) {
-      current = current.parentElement;
-    } else {
-      break;
+const TARGET_ATTR = 'data-playwright-target';
+const MAX_SNAPSHOT_BYTES = 5000;
+const MAX_CONTEXT_BYTES  = 8000;
+
+/**
+ * Captures outerHTML of an ancestor `depth` levels above `el`.
+ * Temporarily marks `el` with data-playwright-target="1" so the
+ * LLM knows exactly which element to build a locator for.
+ */
+export function getDomSnapshot(el: HTMLElement, depth = 4): string {
+  // Mark the target element
+  el.setAttribute(TARGET_ATTR, '1');
+
+  try {
+    // Walk up `depth` levels
+    let ancestor: HTMLElement = el;
+    for (let i = 0; i < depth; i++) {
+      if (ancestor.parentElement && ancestor.parentElement !== document.documentElement) {
+        ancestor = ancestor.parentElement;
+      } else break;
     }
-  }
 
-  // Клонируем элемент с ограниченной глубиной
-  const clone = element.cloneNode(true) as HTMLElement;
-  
-  // Ограничиваем размер сниппета
-  const serializer = new XMLSerializer();
-  html = serializer.serializeToString(clone);
-  
-  // Обрезаем слишком длинные сниппеты
-  if (html.length > 2000) {
-    html = html.substring(0, 2000) + '...';
+    // Serialize and truncate
+    const html = ancestor.outerHTML;
+    return html.length > MAX_SNAPSHOT_BYTES
+      ? html.slice(0, MAX_SNAPSHOT_BYTES) + '\n<!-- truncated -->'
+      : html;
+  } finally {
+    el.removeAttribute(TARGET_ATTR);
   }
-
-  return html;
 }
 
 /**
- * Получает целевой элемент из события
+ * Returns the outerHTML of the nearest semantic landmark ancestor
+ * (form, main, section, article, nav, header, footer, dialog).
+ * If none found, returns the direct parent's outerHTML.
+ * Gives LLM a broader view of the page region.
  */
+export function getPageContext(el: HTMLElement): string | undefined {
+  let current: HTMLElement | null = el.parentElement;
+
+  while (current && current !== document.documentElement) {
+    if (LANDMARK_TAGS.has(current.tagName.toLowerCase())) {
+      const html = current.outerHTML;
+      return html.length > MAX_CONTEXT_BYTES
+        ? html.slice(0, MAX_CONTEXT_BYTES) + '\n<!-- truncated -->'
+        : html;
+    }
+    current = current.parentElement;
+  }
+
+  // Fallback: 5 levels up
+  let ancestor: HTMLElement = el;
+  for (let i = 0; i < 5 && ancestor.parentElement; i++) {
+    ancestor = ancestor.parentElement;
+  }
+  if (ancestor === el) return undefined;
+  const html = ancestor.outerHTML;
+  return html.length > MAX_CONTEXT_BYTES
+    ? html.slice(0, MAX_CONTEXT_BYTES) + '\n<!-- truncated -->'
+    : html;
+}
+
+// ── Event helpers ────────────────────────────────────────────────
+
 export function getTargetElement(event: Event): HTMLElement | null {
   const target = event.target as HTMLElement;
-  
   if (!target) return null;
-  
-  // Игнорируем события на хайлайтере
-  if (isHighlightElement(target)) {
-    return null;
-  }
+  if (isHighlightElement(target)) return null;
 
-  // Для событий на дочерних элементах, поднимаемся до интерактивного элемента
-  let element: HTMLElement | null = target;
-  
-  while (element && element !== document.body) {
-    const tagName = element.tagName.toLowerCase();
-    if (['button', 'a', 'input', 'select', 'textarea', 'label', '[role="button"]'].includes(tagName) ||
-        element.getAttribute('role') === 'button' ||
-        element.onclick !== null ||
-        element.getAttribute('data-testid')) {
-      return element;
+  // Walk up to the nearest interactive element
+  let el: HTMLElement | null = target;
+  while (el && el !== document.body) {
+    const tag = el.tagName.toLowerCase();
+    if (
+      INTERACTIVE_TAGS.has(tag) ||
+      el.getAttribute('role') === 'button' ||
+      el.getAttribute('role') === 'link' ||
+      el.getAttribute('data-testid') ||
+      el.onclick !== null
+    ) {
+      return el;
     }
-    element = element.parentElement;
+    el = el.parentElement;
   }
 
   return target;
 }
 
-/**
- * Создает запись действия
- */
 export function createActionRecord(
   type: RecordedAction['type'],
   element: HTMLElement | null,
-  value?: string
+  value?: string,
 ): RecordedAction | null {
   if (!element) return null;
-
-  const signature = collectElementSignature(element);
-  const domSnapshot = getDomSnapshot(element);
 
   return {
     type,
     timestamp: Date.now(),
-    url: window.location.href,
-    element: signature,
+    url:         window.location.href,
+    pageTitle:   document.title || undefined,
+    element:     collectElementSignature(element),
     value,
-    domSnapshot,
+    domSnapshot: getDomSnapshot(element, 4),
+    pageContext: getPageContext(element),
   };
 }

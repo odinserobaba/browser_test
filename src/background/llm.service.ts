@@ -1,252 +1,294 @@
 /**
- * LLM Service - интеграция с AI для генерации локаторов
+ * LLM Service — generates Playwright locators using AI.
+ * Uses the enriched context fields captured by the updated recorder:
+ *   - domSnapshot  : ancestor HTML with the target marked by data-playwright-target="1"
+ *   - pageContext   : nearest semantic landmark (form / section / main …)
+ *   - ElementSignature : testId, ariaLabel, associated label, cssPath, data-* attrs
  */
 
 import { LLMConfig, LLMResponse } from './types';
 import { RecordedAction } from '../content/types';
 
-const DEFAULT_SYSTEM_PROMPT = `You are a Senior SDET. Your task is to convert a recorded UI action into a robust Playwright (Python) command.
+// ── System prompt ────────────────────────────────────────────────
 
-Guidelines:
-1. Use Playwright Python syntax (page.locator, page.get_by_text, etc.).
-2. NEVER use absolute XPath like /div/div[2]/span.
-3. PRIORITY ORDER for selectors:
-   1. get_by_test_id()
-   2. get_by_role()
-   3. get_by_label() / get_by_placeholder()
-   4. get_by_text()
-   5. locator() with CSS (only if others fail)
-4. If input is sensitive (password), use variable placeholder like os.getenv("VAR_NAME").
-5. Output ONLY the code line, no markdown, no explanations.
-6. For fill actions, include .fill() method.
-7. For click actions, include .click() method.
-8. For select actions, use .select_option() method.`;
+const SYSTEM_PROMPT = `\
+You are a Senior SDET specializing in Playwright test automation.
+Your task: given a recorded browser action with its full DOM context, produce ONE
+robust Playwright (Python) line that performs that action.
 
-/**
- * Генерирует промпт для LLM на основе действия
- */
+Rules:
+1. Playwright Python syntax only.
+2. NEVER use absolute XPath (/html/body/div[2]/span).
+3. NEVER use CSS position selectors like :nth-child or index-based locators.
+4. Prefer locators in this priority:
+     1. page.get_by_test_id("…")        ← if data-playwright-target has data-testid
+     2. page.get_by_role("…", name="…") ← use aria role + accessible name
+     3. page.get_by_label("…")          ← for inputs with associated labels
+     4. page.get_by_placeholder("…")    ← for inputs with placeholders
+     5. page.get_by_text("…", exact=True) ← for buttons/links with stable text
+     6. page.locator("css selector")    ← last resort; use only stable attributes
+5. For password fields use: os.getenv("TEST_PASSWORD", "")
+6. The target element inside the HTML is marked with the attribute data-playwright-target="1".
+7. Output ONLY the single Python code line. No markdown, no comments, no explanation.`;
+
+// ── Prompt builder ───────────────────────────────────────────────
+
 function buildPrompt(action: RecordedAction): string {
-  const { type, element, value, domSnapshot } = action;
-  
-  let prompt = `Action Type: ${type}\n`;
-  
-  if (value) {
-    prompt += `Target Value: ${value}\n`;
-  }
-  
+  const { type, element, value, domSnapshot, pageContext, pageTitle, url } = action;
+
+  const lines: string[] = [];
+
+  lines.push(`Action: ${type.toUpperCase()}`);
+  if (value)      lines.push(`Value to use: ${value}`);
+  if (pageTitle)  lines.push(`Page title: ${pageTitle}`);
+  if (url)        lines.push(`URL: ${url}`);
+
   if (element) {
-    prompt += `Element Info:\n`;
-    if (element.testId) prompt += `- data-testid: ${element.testId}\n`;
-    if (element.role) prompt += `- role: ${element.role}\n`;
-    if (element.id) prompt += `- id: ${element.id}\n`;
-    if (element.name) prompt += `- name: ${element.name}\n`;
-    if (element.placeholder) prompt += `- placeholder: ${element.placeholder}\n`;
-    if (element.type) prompt += `- type: ${element.type}\n`;
-    if (element.text) prompt += `- text: ${element.text.substring(0, 50)}\n`;
+    lines.push('');
+    lines.push('Element attributes:');
+    if (element.testId)       lines.push(`  data-testid   : ${element.testId}`);
+    if (element.ariaLabel)    lines.push(`  aria-label    : ${element.ariaLabel}`);
+    if (element.ariaLabelledby) lines.push(`  aria-labelledby text: ${element.ariaLabelledby}`);
+    if (element.role)         lines.push(`  role          : ${element.role}`);
+    if (element.label)        lines.push(`  <label> text  : ${element.label}`);
+    if (element.id)           lines.push(`  id            : ${element.id}`);
+    if (element.name)         lines.push(`  name          : ${element.name}`);
+    if (element.placeholder)  lines.push(`  placeholder   : ${element.placeholder}`);
+    if (element.type)         lines.push(`  type          : ${element.type}`);
+    if (element.title)        lines.push(`  title         : ${element.title}`);
+    if (element.href)         lines.push(`  href          : ${element.href}`);
+    if (element.text)         lines.push(`  visible text  : ${element.text.slice(0, 80)}`);
+    if (element.cssPath)      lines.push(`  css path      : ${element.cssPath}`);
+    if (element.tag)          lines.push(`  tag           : ${element.tag}`);
+
+    if (element.dataAttributes && Object.keys(element.dataAttributes).length) {
+      lines.push('  data-* attrs  :');
+      for (const [k, v] of Object.entries(element.dataAttributes)) {
+        lines.push(`    ${k} = "${v}"`);
+      }
+    }
   }
-  
+
+  // DOM snapshot: ancestor 4 levels up with the target marked
   if (domSnapshot) {
-    prompt += `\nHTML Context:\n${domSnapshot.substring(0, 1000)}\n`;
+    lines.push('');
+    lines.push('DOM context (target element has data-playwright-target="1"):');
+    lines.push(domSnapshot.slice(0, 4000));
   }
-  
-  return prompt;
+
+  // Broader semantic context
+  if (pageContext && pageContext !== domSnapshot) {
+    lines.push('');
+    lines.push('Semantic ancestor context (form/section/main/…):');
+    lines.push(pageContext.slice(0, 3000));
+  }
+
+  return lines.join('\n');
 }
 
-/**
- * Генерирует локатор через OpenAI API
- */
+// ── OpenAI ───────────────────────────────────────────────────────
+
 async function generateWithOpenAI(
   action: RecordedAction,
   apiKey: string,
-  model: string = 'gpt-4-turbo-preview'
+  model  = 'gpt-4o',
+  baseUrl = 'https://api.openai.com/v1',
 ): Promise<LLMResponse> {
   const prompt = buildPrompt(action);
-  
+
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type':  'application/json',
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: DEFAULT_SYSTEM_PROMPT },
-          { role: 'user', content: prompt },
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user',   content: prompt },
         ],
-        temperature: 0.3,
-        max_tokens: 200,
+        temperature: 0.1,
+        max_tokens:  256,
       }),
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error?.message || 'OpenAI API error');
+      const err = await response.json().catch(() => ({}));
+      throw new Error((err as any).error?.message || `HTTP ${response.status}`);
     }
 
     const data = await response.json();
-    const locator = data.choices[0]?.message?.content?.trim() || '';
-    
-    if (!locator) {
-      throw new Error('Empty response from LLM');
-    }
-
+    const locator = (data.choices?.[0]?.message?.content || '').trim();
+    if (!locator) throw new Error('Empty response from LLM');
     return { locator };
   } catch (error) {
-    return {
-      locator: '',
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    return { locator: '', error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-/**
- * Генерирует локатор через локальный LLM (Ollama)
- */
-async function generateWithLocalLLM(
+// ── Anthropic ────────────────────────────────────────────────────
+
+async function generateWithAnthropic(
   action: RecordedAction,
-  baseUrl: string = 'http://localhost:11434'
+  apiKey: string,
+  model  = 'claude-3-5-sonnet-20241022',
 ): Promise<LLMResponse> {
   const prompt = buildPrompt(action);
-  const fullPrompt = `${DEFAULT_SYSTEM_PROMPT}\n\n${prompt}`;
-  
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 256,
+        system:   SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error((err as any).error?.message || `HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const locator = (data.content?.[0]?.text || '').trim();
+    if (!locator) throw new Error('Empty response from Anthropic');
+    return { locator };
+  } catch (error) {
+    return { locator: '', error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// ── Local / Ollama ───────────────────────────────────────────────
+
+async function generateWithLocalLLM(
+  action: RecordedAction,
+  baseUrl = 'http://localhost:11434',
+  model   = 'llama3',
+): Promise<LLMResponse> {
+  const prompt = `${SYSTEM_PROMPT}\n\n${buildPrompt(action)}`;
+
   try {
     const response = await fetch(`${baseUrl}/api/generate`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama2',
-        prompt: fullPrompt,
-        stream: false,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt, stream: false }),
     });
 
-    if (!response.ok) {
-      throw new Error('Local LLM API error');
-    }
+    if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
 
-    const data = await response.json();
-    const locator = data.response?.trim() || '';
-    
+    const data  = await response.json();
+    const locator = (data.response || '').trim();
     return { locator };
   } catch (error) {
-    return {
-      locator: '',
-      error: error instanceof Error ? error.message : 'Local LLM unavailable',
-    };
+    return { locator: '', error: error instanceof Error ? error.message : 'Local LLM unavailable' };
   }
 }
 
-/**
- * Генерирует локатор для действия
- */
+// ── Fallback heuristic (no LLM) ──────────────────────────────────
+
+function generateFallbackLocator(action: RecordedAction): LLMResponse {
+  const { type, element, value } = action;
+
+  if (!element) return { locator: '# TODO: no element data', error: 'No element' };
+
+  let loc = 'page.';
+
+  if (element.testId) {
+    loc += `get_by_test_id("${element.testId}")`;
+  } else if (element.ariaLabel) {
+    loc += `get_by_role("${element.role || element.tag}", name="${element.ariaLabel}")`;
+  } else if (element.label) {
+    loc += `get_by_label("${element.label}")`;
+  } else if (element.placeholder) {
+    loc += `get_by_placeholder("${element.placeholder}")`;
+  } else if (element.role && element.text) {
+    loc += `get_by_role("${element.role}", name="${element.text.slice(0, 50)}")`;
+  } else if (element.text && element.text.length < 60 && element.tag !== 'div') {
+    loc += `get_by_text("${element.text.slice(0, 60)}", exact=True)`;
+  } else if (element.id) {
+    loc += `locator("#${element.id}")`;
+  } else if (element.cssPath) {
+    loc += `locator("${element.cssPath}")`;
+  } else {
+    loc += `locator("${element.tag}")`;
+  }
+
+  // Append action method
+  if (type === 'click') {
+    loc += '.click()';
+  } else if (type === 'fill') {
+    const v = element.type === 'password'
+      ? 'os.getenv("TEST_PASSWORD", "")'
+      : value ? `"${value}"` : '""';
+    loc += `.fill(${v})`;
+  } else if (type === 'select') {
+    loc += `.select_option("${value || ''}")`;
+  }
+
+  return { locator: loc };
+}
+
+// ── Public API ───────────────────────────────────────────────────
+
 export async function generateLocator(
   action: RecordedAction,
-  config: LLMConfig
+  config: LLMConfig,
 ): Promise<LLMResponse> {
-  // Fallback на простую эвристику, если LLM недоступен
   if (!config.apiKey && config.provider !== 'local') {
     return generateFallbackLocator(action);
   }
 
   try {
-    if (config.provider === 'openai' && config.apiKey) {
-      return await generateWithOpenAI(action, config.apiKey, config.model);
-    } else if (config.provider === 'local') {
-      return await generateWithLocalLLM(action, config.baseUrl);
-    } else {
-      return generateFallbackLocator(action);
+    switch (config.provider) {
+      case 'openai':
+        return await generateWithOpenAI(
+          action,
+          config.apiKey!,
+          config.model,
+          (config as any).baseUrl || 'https://api.openai.com/v1',
+        );
+      case 'anthropic':
+        return await generateWithAnthropic(action, config.apiKey!, config.model);
+      case 'local':
+        return await generateWithLocalLLM(
+          action,
+          (config as any).baseUrl || 'http://localhost:11434',
+          config.model || 'llama3',
+        );
+      default:
+        return generateFallbackLocator(action);
     }
   } catch (error) {
-    console.error('[LLM Service] Error generating locator:', error);
+    console.error('[LLM Service] Error:', error);
     return generateFallbackLocator(action);
   }
 }
 
-/**
- * Простая эвристика для генерации локатора (fallback)
- */
-function generateFallbackLocator(action: RecordedAction): LLMResponse {
-  const { type, element, value } = action;
-  
-  if (!element) {
-    return { locator: `# TODO: Element not found`, error: 'No element data' };
-  }
-
-  let locator = 'page.';
-
-  // Приоритет 1: data-testid
-  if (element.testId) {
-    locator += `get_by_test_id("${element.testId}")`;
-  }
-  // Приоритет 2: role
-  else if (element.role) {
-    locator += `get_by_role("${element.role}"`;
-    if (element.text) {
-      locator += `, { name: "${element.text.substring(0, 50)}" }`;
-    }
-    locator += ')';
-  }
-  // Приоритет 3: label/placeholder для input
-  else if ((element.type === 'text' || element.type === 'email' || element.type === 'password') && 
-           (element.name || element.placeholder)) {
-    const label = element.name || element.placeholder;
-    locator += `get_by_label("${label}")`;
-  }
-  // Приоритет 4: text
-  else if (element.text && element.text.length < 50) {
-    locator += `get_by_text("${element.text}")`;
-  }
-  // Приоритет 5: CSS selector
-  else if (element.id) {
-    locator += `locator("#${element.id}")`;
-  }
-  else if (element.classes && element.classes.length > 0) {
-    locator += `locator(".${element.classes[0]}")`;
-  }
-  else {
-    locator += `locator("${element.tagName}")`;
-  }
-
-  // Добавляем действие
-  if (type === 'click') {
-    locator += '.click()';
-  } else if (type === 'fill') {
-    const fillValue = element.type === 'password' 
-      ? 'os.getenv("TEST_PASSWORD", "Qwerty123!")'
-      : value 
-        ? `"${value}"` 
-        : '""';
-    locator += `.fill(${fillValue})`;
-  } else if (type === 'select') {
-    locator += `.select_option("${value || ''}")`;
-  }
-
-  return { locator };
-}
-
-/**
- * Генерирует локаторы для всех действий
- */
 export async function generateLocatorsForActions(
   actions: RecordedAction[],
-  config: LLMConfig
+  config: LLMConfig,
 ): Promise<string[]> {
   const locators: string[] = [];
-  
+
   for (const action of actions) {
     const result = await generateLocator(action, config);
     if (result.error) {
-      console.warn(`[LLM Service] Error for action ${action.type}:`, result.error);
+      console.warn(`[LLM] Error for ${action.type}:`, result.error);
     }
-    locators.push(result.locator || `# TODO: ${result.error || 'Failed to generate'}`);
-    
-    // Небольшая задержка между запросами
-    await new Promise(resolve => setTimeout(resolve, 100));
+    locators.push(result.locator || `# TODO: ${result.error || 'generation failed'}`);
+
+    // Small delay to respect API rate limits
+    await new Promise(r => setTimeout(r, 150));
   }
-  
+
   return locators;
 }

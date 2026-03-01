@@ -1,0 +1,53 @@
+{
+  "savedAt": "2026-03-01T18:38:22.237Z",
+  "actionCount": 4,
+  "note": "Load this file with \"Load & Generate\" to produce a Playwright test later",
+  "actions": [
+    {
+      "type": "click",
+      "timestamp": 1772390244462,
+      "url": "https://vgtimes.ru/forum/",
+      "element": {
+        "tagName": "a",
+        "classes": [
+          "close"
+        ],
+        "href": "https://vgtimes.ru/forum/#"
+      },
+      "domSnapshot": "<a xmlns=\"http://www.w3.org/1999/xhtml\" href=\"#\" class=\"close\">\n      <i class=\"fa fa-times\" aria-hidden=\"true\"></i>\n    </a>"
+    },
+    {
+      "type": "click",
+      "timestamp": 1772390245783,
+      "url": "https://vgtimes.ru/forum/",
+      "element": {
+        "tagName": "a",
+        "text": "Zenless Zone Zero",
+        "href": "https://vgtimes.ru/games/zenless-zone-zero/?from=top"
+      },
+      "domSnapshot": "<a xmlns=\"http://www.w3.org/1999/xhtml\" href=\"/games/zenless-zone-zero/?from=top\" data-pjax=\"gamepage\"><i class=\"fa fa-gamepad\" aria-hidden=\"true\"></i>Zenless Zone Zero</a>"
+    },
+    {
+      "type": "click",
+      "timestamp": 1772390247239,
+      "url": "https://vgtimes.ru/games/zenless-zone-zero/?from=top",
+      "element": {
+        "tagName": "a",
+        "text": "Arknights: Endfield",
+        "href": "https://vgtimes.ru/games/arknights-endfield/?from=top"
+      },
+      "domSnapshot": "<a xmlns=\"http://www.w3.org/1999/xhtml\" href=\"/games/arknights-endfield/?from=top\" data-pjax=\"gamepage\"><i class=\"fa fa-gamepad\" aria-hidden=\"true\"></i>Arknights: Endfield</a>"
+    },
+    {
+      "type": "click",
+      "timestamp": 1772390248942,
+      "url": "https://vgtimes.ru/games/arknights-endfield/?from=top",
+      "element": {
+        "tagName": "a",
+        "text": "BeamNG.drive",
+        "href": "https://vgtimes.ru/games/beamng.drive/?from=top"
+      },
+      "domSnapshot": "<a xmlns=\"http://www.w3.org/1999/xhtml\" href=\"/games/beamng.drive/?from=top\" data-pjax=\"gamepage\"><i class=\"fa fa-gamepad\" aria-hidden=\"true\"></i>BeamNG.drive</a>"
+    }
+  ]
+}
