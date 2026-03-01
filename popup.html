@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Playwright Recorder</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎭 AI Playwright Recorder</h1>
+    </header>
+
+    <div class="section">
+      <div class="status" id="status">
+        <span class="status-indicator" id="statusIndicator"></span>
+        <span id="statusText">Готов к записи</span>
+      </div>
+      
+      <div class="actions-count" id="actionsCount" style="display: none;">
+        Записано действий: <strong id="actionsCountValue">0</strong>
+      </div>
+    </div>
+
+    <div class="section">
+      <button id="startBtn" class="btn btn-primary">▶ Начать запись</button>
+      <button id="stopBtn" class="btn btn-secondary" disabled>⏹ Остановить</button>
+    </div>
+
+    <div class="section">
+      <button id="generateBtn" class="btn btn-success" disabled>✨ Сгенерировать тест</button>
+      <button id="selectDirBtn" class="btn btn-outline">📁 Выбрать папку</button>
+    </div>
+
+    <div class="section">
+      <h3>Настройки LLM</h3>
+      <div class="form-group">
+        <label for="apiKey">API Key:</label>
+        <input type="password" id="apiKey" placeholder="sk-...">
+      </div>
+      <div class="form-group">
+        <label for="llmProvider">Провайдер:</label>
+        <select id="llmProvider">
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="local">Local (Ollama)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="llmModel">Модель:</label>
+        <input type="text" id="llmModel" placeholder="gpt-4-turbo-preview">
+      </div>
+      <button id="saveConfigBtn" class="btn btn-outline">💾 Сохранить настройки</button>
+    </div>
+
+    <div class="section">
+      <div id="selectedDir" class="info-text" style="display: none;">
+        📁 Папка: <span id="selectedDirPath">Не выбрана</span>
+      </div>
+    </div>
+
+    <div id="message" class="message" style="display: none;"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
