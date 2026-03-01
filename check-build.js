@@ -1,11 +1,12 @@
 /**
- * Скрипт для проверки готовности проекта к загрузке в Chrome
+ * Script to verify project readiness for Chrome loading
+ * Uses ES module syntax (package.json has "type": "module")
  */
 
-const fs = require('fs');
-const path = require('path');
+import { existsSync, statSync, readFileSync } from 'fs';
+import { join } from 'path';
 
-console.log('🔍 Проверка структуры проекта...\n');
+console.log('Checking project structure...\n');
 
 const requiredFiles = [
   'dist/background/index.js',
@@ -24,91 +25,91 @@ const requiredDirs = [
 
 let hasErrors = false;
 
-// Проверка директорий
-console.log('📁 Проверка директорий:');
+// Check directories
+console.log('Directories:');
 requiredDirs.forEach(dir => {
-  if (fs.existsSync(dir)) {
-    console.log(`  ✅ ${dir}`);
+  if (existsSync(dir)) {
+    console.log(`  OK  ${dir}`);
   } else {
-    console.log(`  ❌ ${dir} - НЕ НАЙДЕНА`);
+    console.log(`  MISSING  ${dir}`);
     hasErrors = true;
   }
 });
 
-console.log('\n📄 Проверка файлов:');
+// Check files
+console.log('\nFiles:');
 requiredFiles.forEach(file => {
-  if (fs.existsSync(file)) {
-    const stats = fs.statSync(file);
-    console.log(`  ✅ ${file} (${stats.size} bytes)`);
+  if (existsSync(file)) {
+    const stats = statSync(file);
+    console.log(`  OK  ${file} (${stats.size} bytes)`);
   } else {
-    console.log(`  ❌ ${file} - НЕ НАЙДЕН`);
+    console.log(`  MISSING  ${file}`);
     hasErrors = true;
   }
 });
 
-// Проверка manifest.json
-console.log('\n📋 Проверка manifest.json:');
+// Check manifest.json paths
+console.log('\nManifest check:');
 try {
   const manifestPath = 'dist/manifest.json';
-  if (fs.existsSync(manifestPath)) {
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    
-    // Проверка путей
+  if (existsSync(manifestPath)) {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+
     if (manifest.background?.service_worker) {
       const bgPath = manifest.background.service_worker;
-      if (fs.existsSync(path.join('dist', bgPath))) {
-        console.log(`  ✅ Background script: ${bgPath}`);
+      if (existsSync(join('dist', bgPath))) {
+        console.log(`  OK  Background script: ${bgPath}`);
       } else {
-        console.log(`  ❌ Background script не найден: ${bgPath}`);
+        console.log(`  MISSING  Background script: ${bgPath}`);
         hasErrors = true;
       }
     }
-    
+
     if (manifest.content_scripts?.[0]?.js) {
       manifest.content_scripts[0].js.forEach(jsPath => {
-        const fullPath = path.join('dist', jsPath);
-        if (fs.existsSync(fullPath)) {
-          console.log(`  ✅ Content script: ${jsPath}`);
+        const fullPath = join('dist', jsPath);
+        if (existsSync(fullPath)) {
+          console.log(`  OK  Content script: ${jsPath}`);
         } else {
-          console.log(`  ❌ Content script не найден: ${jsPath}`);
+          console.log(`  MISSING  Content script: ${jsPath}`);
           hasErrors = true;
         }
       });
     }
-    
+
     if (manifest.action?.default_popup) {
       const popupPath = manifest.action.default_popup;
-      if (fs.existsSync(path.join('dist', popupPath))) {
-        console.log(`  ✅ Popup: ${popupPath}`);
+      if (existsSync(join('dist', popupPath))) {
+        console.log(`  OK  Popup: ${popupPath}`);
       } else {
-        console.log(`  ❌ Popup не найден: ${popupPath}`);
+        console.log(`  MISSING  Popup: ${popupPath}`);
         hasErrors = true;
       }
     }
   } else {
-    console.log('  ❌ manifest.json не найден в dist/');
+    console.log('  MISSING  dist/manifest.json');
     hasErrors = true;
   }
 } catch (error) {
-  console.log(`  ❌ Ошибка чтения manifest.json: ${error.message}`);
+  console.log(`  ERROR  reading manifest.json: ${error.message}`);
   hasErrors = true;
 }
 
 console.log('\n' + '='.repeat(50));
 
 if (hasErrors) {
-  console.log('\n❌ Проект НЕ готов к загрузке в Chrome');
-  console.log('\n📝 Выполните:');
+  console.log('\nProject is NOT ready for Chrome');
+  console.log('\nRun:');
   console.log('   1. npm install');
   console.log('   2. npm run build');
-  console.log('   3. Загрузите папку dist/ в Chrome');
+  console.log('   3. Load the dist/ folder in Chrome');
   process.exit(1);
 } else {
-  console.log('\n✅ Проект готов к загрузке в Chrome!');
-  console.log('\n📝 Следующие шаги:');
-  console.log('   1. Откройте chrome://extensions/');
-  console.log('   2. Включите "Режим разработчика"');
-  console.log('   3. Нажмите "Загрузить распакованное расширение"');
-  console.log('   4. Выберите папку dist/');
+  console.log('\nProject is ready for Chrome!');
+  console.log('\nNext steps:');
+  console.log('   1. Open chrome://extensions/');
+  console.log('   2. Enable "Developer mode"');
+  console.log('   3. Click "Load unpacked"');
+  console.log('   4. Select the dist/ folder');
   process.exit(0);
 }
