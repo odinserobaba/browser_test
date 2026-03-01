@@ -47,7 +47,24 @@ staticFiles.forEach(file => {
 
 // Копируем директории
 staticDirs.forEach(dir => {
-  copyDir(dir, path.join('dist', dir));
+  if (fs.existsSync(dir)) {
+    copyDir(dir, path.join('dist', dir));
+  } else {
+    console.log(`⚠️  Warning: ${dir} directory not found. Icons will be missing.`);
+    // Создаем пустую директорию для структуры
+    const destDir = path.join('dist', dir);
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+      // Создаем README в папке иконок
+      if (dir === 'icons') {
+        fs.writeFileSync(
+          path.join(destDir, 'README.txt'),
+          'Place icon16.png, icon48.png, and icon128.png here'
+        );
+      }
+    }
+  }
 });
 
-console.log('Static files copied successfully!');
+console.log('\n✅ Static files copied successfully!');
+console.log('⚠️  Note: If icons are missing, create icon16.png, icon48.png, and icon128.png in icons/ folder');

@@ -7,7 +7,8 @@
     "dev": "vite build --watch --mode development",
     "build": "vite build --mode production && node scripts/copy-static.js",
     "preview": "vite preview",
-    "postbuild": "node scripts/copy-static.js"
+    "postbuild": "node scripts/copy-static.js",
+    "check": "node check-build.js"
   },
   "keywords": [
     "playwright",
